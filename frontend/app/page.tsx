@@ -14,12 +14,16 @@ import {
   Plus,
   X,
   Image as ImageIcon,
+  Search,
+  Sparkles,
+  Users,
+  ArrowRight,
 } from "lucide-react";
 
 interface User {
   name: string;
   email: string;
-  id?: string;
+  token?: string;
 }
 
 interface Event {
@@ -31,17 +35,36 @@ interface Event {
   description?: string;
   category?: string;
   image?: string;
+  host?: {
+    name: string;
+    avatar?: string;
+  };
+  capacity?: number;
+  attendees?: number;
 }
 
 interface AuthResponse {
-  user: User;
+  message: string;
   token?: string;
+  user: {
+    name: string;
+    email: string;
+    token?: string;
+  };
+  errors?: string[];
 }
 
-interface VerifyResponse {
-  valid: boolean;
-  user: User;
-}
+const categories = [
+  { id: "all", name: "All" },
+  { id: "wellness", name: "Wellness" },
+  { id: "technology", name: "Technology" },
+  { id: "art-culture", name: "Art & Culture" },
+  { id: "social", name: "Social" },
+  { id: "outdoor", name: "Outdoor" },
+  { id: "food-drink", name: "Food & Drink" },
+  { id: "music", name: "Music" },
+  { id: "sports", name: "Sports" },
+];
 
 export default function EventsApp() {
   const [events, setEvents] = useState<Event[]>([]);
@@ -52,13 +75,14 @@ export default function EventsApp() {
   const [authMode, setAuthMode] = useState<"login" | "signup">("login");
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState("");
+  const [searchQuery, setSearchQuery] = useState("");
+  const [selectedCategory, setSelectedCategory] = useState("all");
 
   const [loginForm, setLoginForm] = useState({ email: "", password: "" });
   const [signupForm, setSignupForm] = useState({
     name: "",
     email: "",
     password: "",
-    confirmPassword: "",
   });
 
   const [createEventForm, setCreateEventForm] = useState({
@@ -69,9 +93,28 @@ export default function EventsApp() {
     location: "",
     category: "",
     image: "",
+    capacity: "",
   });
 
-  const API_URL = "http://localhost:3000/api";
+  const API_URL = "http://localhost:3001";
+
+  useEffect(() => {
+    const savedToken = localStorage.getItem("authToken");
+    const savedUser = localStorage.getItem("currentUser");
+
+    if (savedToken && savedUser) {
+      try {
+        const user = JSON.parse(savedUser);
+        setCurrentUser({ ...user, token: savedToken });
+        setIsAuthenticated(true);
+        loadEvents(savedToken);
+      } catch (err) {
+        console.error("Erro ao carregar sessão:", err);
+        localStorage.removeItem("authToken");
+        localStorage.removeItem("currentUser");
+      }
+    }
+  }, []);
 
   const handleLogin = async (e: FormEvent<HTMLFormElement>) => {
     e.preventDefault();
@@ -79,7 +122,7 @@ export default function EventsApp() {
     setError("");
 
     try {
-      const response = await fetch(`${API_URL}/auth/login`, {
+      const response = await fetch(`${API_URL}/login`, {
         method: "POST",
         headers: {
           "Content-Type": "application/json",
@@ -90,22 +133,29 @@ export default function EventsApp() {
         }),
       });
 
-      if (!response.ok) {
-        throw new Error("Login failed");
-      }
-
       const data: AuthResponse = await response.json();
 
-      setCurrentUser(data.user);
+      if (!response.ok) {
+        throw new Error(data.message || "Login failed");
+      }
+
+      const token = data.user.token || data.token;
+      const userData = {
+        name: data.user.name,
+        email: data.user.email,
+      };
+
+      if (token) {
+        localStorage.setItem("authToken", token);
+        localStorage.setItem("currentUser", JSON.stringify(userData));
+      }
+
+      setCurrentUser({ ...userData, token });
       setIsAuthenticated(true);
       setShowAuthMenu(false);
       setLoginForm({ email: "", password: "" });
 
-      if (data.token) {
-        localStorage.setItem("authToken", data.token);
-      }
-
-      loadEvents(data.token);
+      loadEvents(token);
     } catch (err) {
       setError((err as Error).message || "Erro ao fazer login");
     } finally {
@@ -115,44 +165,50 @@ export default function EventsApp() {
 
   const handleSignup = async (e: FormEvent<HTMLFormElement>) => {
     e.preventDefault();
-
-    if (signupForm.password !== signupForm.confirmPassword) {
-      setError("As senhas não coincidem");
-      return;
-    }
-
     setLoading(true);
     setError("");
 
     try {
-      const response = await fetch(`${API_URL}/auth/signup`, {
+      const response = await fetch(`${API_URL}/users`, {
         method: "POST",
         headers: {
           "Content-Type": "application/json",
         },
         body: JSON.stringify({
-          name: signupForm.name,
-          email: signupForm.email,
-          password: signupForm.password,
+          user: {
+            name: signupForm.name,
+            email: signupForm.email,
+            password: signupForm.password,
+          },
         }),
       });
 
-      if (!response.ok) {
-        throw new Error("Cadastro falhou");
-      }
-
       const data: AuthResponse = await response.json();
 
-      setCurrentUser(data.user);
-      setIsAuthenticated(true);
-      setShowAuthMenu(false);
-      setSignupForm({ name: "", email: "", password: "", confirmPassword: "" });
-
-      if (data.token) {
-        localStorage.setItem("authToken", data.token);
+      if (!response.ok) {
+        const errorMessage = data.errors
+          ? data.errors.join(", ")
+          : data.message || "Cadastro falhou";
+        throw new Error(errorMessage);
       }
 
-      loadEvents(data.token);
+      const token = data.token;
+      const userData = {
+        name: data.user.name,
+        email: data.user.email,
+      };
+
+      if (token) {
+        localStorage.setItem("authToken", token);
+        localStorage.setItem("currentUser", JSON.stringify(userData));
+      }
+
+      setCurrentUser({ ...userData, token });
+      setIsAuthenticated(true);
+      setShowAuthMenu(false);
+      setSignupForm({ name: "", email: "", password: "" });
+
+      loadEvents(token);
     } catch (err) {
       setError((err as Error).message || "Erro ao criar conta");
     } finally {
@@ -166,7 +222,7 @@ export default function EventsApp() {
     setError("");
 
     try {
-      const authToken = localStorage.getItem("authToken");
+      const authToken = currentUser?.token || localStorage.getItem("authToken");
 
       const response = await fetch(`${API_URL}/events`, {
         method: "POST",
@@ -174,7 +230,9 @@ export default function EventsApp() {
           "Content-Type": "application/json",
           Authorization: `Bearer ${authToken}`,
         },
-        body: JSON.stringify(createEventForm),
+        body: JSON.stringify({
+          event: createEventForm,
+        }),
       });
 
       if (!response.ok) {
@@ -193,6 +251,7 @@ export default function EventsApp() {
         location: "",
         category: "",
         image: "",
+        capacity: "",
       });
     } catch (err) {
       setError((err as Error).message || "Erro ao criar evento");
@@ -203,7 +262,8 @@ export default function EventsApp() {
 
   const loadEvents = async (token?: string) => {
     try {
-      const authToken = token || localStorage.getItem("authToken");
+      const authToken =
+        token || currentUser?.token || localStorage.getItem("authToken");
 
       const response = await fetch(`${API_URL}/events`, {
         headers: {
@@ -220,16 +280,30 @@ export default function EventsApp() {
       setEvents(data);
     } catch (err) {
       console.error("Erro ao carregar eventos:", err);
-      setError("Não foi possível carregar os eventos");
     }
   };
 
-  const handleLogout = () => {
-    setIsAuthenticated(false);
-    setCurrentUser(null);
-    setEvents([]);
-    setShowAuthMenu(false);
-    localStorage.removeItem("authToken");
+  const handleLogout = async () => {
+    try {
+      const authToken = currentUser?.token || localStorage.getItem("authToken");
+
+      await fetch(`${API_URL}/logout`, {
+        method: "POST",
+        headers: {
+          Authorization: `Bearer ${authToken}`,
+          "Content-Type": "application/json",
+        },
+      });
+    } catch (err) {
+      console.error("Erro ao fazer logout:", err);
+    } finally {
+      setIsAuthenticated(false);
+      setCurrentUser(null);
+      setEvents([]);
+      setShowAuthMenu(false);
+      localStorage.removeItem("authToken");
+      localStorage.removeItem("currentUser");
+    }
   };
 
   const handleCreateEventClick = () => {
@@ -240,76 +314,37 @@ export default function EventsApp() {
     setShowCreateModal(true);
   };
 
-  useEffect(() => {
-    const token = localStorage.getItem("authToken");
-    if (token) {
-      fetch(`${API_URL}/auth/verify`, {
-        headers: {
-          Authorization: `Bearer ${token}`,
-        },
-      })
-        .then((res) => res.json())
-        .then((data: VerifyResponse) => {
-          if (data.valid) {
-            setCurrentUser(data.user);
-            setIsAuthenticated(true);
-            loadEvents(token);
-          } else {
-            localStorage.removeItem("authToken");
-          }
-        })
-        .catch(() => {
-          localStorage.removeItem("authToken");
-        });
-    }
-  }, []);
-
   return (
-    <div className="min-h-screen bg-gradient-to-br from-slate-950 via-blue-950 to-slate-900">
+    <div className="min-h-screen bg-gradient-to-b from-blue-50 via-white to-blue-50">
       {/* Navbar */}
-      <nav className="bg-slate-900/80 backdrop-blur-xl border-b border-blue-500/20 sticky top-0 z-50">
+      <nav className="bg-white border-b border-gray-100 sticky top-0 z-50">
         <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
           <div className="flex justify-between items-center h-16">
-            <div className="flex items-center gap-3">
-              <span className="text-2xl font-bold bg-gradient-to-r from-blue-400 to-cyan-400 bg-clip-text text-transparent">
-                KOMMUNITY
+            <div className="flex items-center gap-2">
+              <Calendar className="w-7 h-7 text-blue-600" />
+              <span className="text-2xl font-bold text-gray-900">
+                Kommunity
               </span>
             </div>
 
-            <div className="flex items-center gap-4">
-              {/* Create Event Button */}
+            <div className="flex items-center gap-3">
               <button
                 onClick={handleCreateEventClick}
-                className="flex items-center gap-2 px-6 py-2.5 bg-gradient-to-r from-blue-500 to-cyan-500 hover:from-blue-600 hover:to-cyan-600 text-white font-semibold rounded-xl transition-all shadow-lg shadow-blue-500/25 hover:shadow-blue-500/40"
+                className="flex items-center gap-2 px-4 py-2 text-gray-700 hover:text-gray-900 font-medium transition-colors"
               >
                 <Plus className="w-5 h-5" />
-                <span>Criar Evento</span>
+                <span>Create Event</span>
               </button>
 
-              {/* User Area */}
               <div className="relative">
                 <button
                   onClick={() => setShowAuthMenu(!showAuthMenu)}
-                  className="flex items-center gap-2 px-4 py-2 rounded-xl bg-slate-800/50 hover:bg-slate-800 border border-blue-500/20 hover:border-blue-500/40 transition-all group"
+                  className="flex items-center gap-2 px-6 py-2 bg-blue-600 hover:bg-blue-700 text-white font-semibold rounded-lg transition-all"
                 >
-                  <div className="w-8 h-8 rounded-full bg-gradient-to-br from-blue-500 to-cyan-500 flex items-center justify-center">
-                    <User className="w-4 h-4 text-white" />
-                  </div>
-                  {isAuthenticated && currentUser ? (
-                    <span className="text-white font-medium">
-                      {currentUser.name}
-                    </span>
-                  ) : (
-                    <span className="text-slate-300">Conta</span>
-                  )}
-                  <ChevronDown
-                    className={`w-4 h-4 text-slate-400 transition-transform ${
-                      showAuthMenu ? "rotate-180" : ""
-                    }`}
-                  />
+                  <User className="w-4 h-4" />
+                  <span>{isAuthenticated ? currentUser?.name : "Sign In"}</span>
                 </button>
 
-                {/* Auth Dropdown Menu */}
                 {showAuthMenu && (
                   <>
                     <div
@@ -317,40 +352,38 @@ export default function EventsApp() {
                       onClick={() => setShowAuthMenu(false)}
                     />
 
-                    <div className="absolute right-0 mt-3 w-96 bg-slate-900/95 backdrop-blur-xl rounded-2xl shadow-2xl border border-blue-500/20 overflow-hidden z-50 animate-in slide-in-from-top-2 duration-200">
+                    <div className="absolute right-0 mt-3 w-96 bg-white rounded-2xl shadow-2xl border border-gray-100 overflow-hidden z-50">
                       {isAuthenticated ? (
                         <div className="p-6">
-                          <div className="flex items-center gap-4 mb-6 pb-6 border-b border-slate-800">
-                            <div className="w-16 h-16 rounded-full bg-gradient-to-br from-blue-500 to-cyan-500 flex items-center justify-center">
-                              <User className="w-8 h-8 text-white" />
+                          <div className="flex items-center gap-4 mb-6 pb-6 border-b border-gray-100">
+                            <div className="w-12 h-12 rounded-full bg-blue-600 flex items-center justify-center">
+                              <User className="w-6 h-6 text-white" />
                             </div>
                             <div className="flex-1">
-                              <h3 className="text-white font-semibold text-lg">
+                              <h3 className="text-gray-900 font-semibold">
                                 {currentUser?.name}
                               </h3>
-                              <p className="text-slate-400 text-sm">
+                              <p className="text-gray-500 text-sm">
                                 {currentUser?.email}
                               </p>
                             </div>
                           </div>
                           <button
                             onClick={handleLogout}
-                            className="w-full flex items-center justify-center gap-2 bg-red-500/10 hover:bg-red-500/20 text-red-400 hover:text-red-300 px-4 py-3 rounded-xl transition-all border border-red-500/20 hover:border-red-500/40"
+                            className="w-full flex items-center justify-center gap-2 bg-red-50 hover:bg-red-100 text-red-600 px-4 py-3 rounded-lg transition-all"
                           >
                             <LogOut className="w-4 h-4" />
-                            <span className="font-medium">Sair</span>
+                            <span className="font-medium">Sign Out</span>
                           </button>
                         </div>
                       ) : (
                         <div className="p-6">
-                          <h2 className="text-2xl font-bold text-white mb-6">
-                            {authMode === "login"
-                              ? "Bem-vindo de volta"
-                              : "Criar conta"}
+                          <h2 className="text-2xl font-bold text-gray-900 mb-6">
+                            {authMode === "login" ? "Welcome back" : "Join us"}
                           </h2>
 
                           {error && (
-                            <div className="mb-4 bg-red-500/10 border border-red-500/30 rounded-xl px-4 py-3 text-red-400 text-sm">
+                            <div className="mb-4 bg-red-50 border border-red-200 rounded-lg px-4 py-3 text-red-600 text-sm">
                               {error}
                             </div>
                           )}
@@ -358,57 +391,51 @@ export default function EventsApp() {
                           {authMode === "login" ? (
                             <form onSubmit={handleLogin} className="space-y-4">
                               <div>
-                                <label className="block text-sm font-medium text-slate-300 mb-2">
+                                <label className="block text-sm font-medium text-gray-700 mb-2">
                                   Email
                                 </label>
-                                <div className="relative">
-                                  <Mail className="absolute left-3 top-1/2 -translate-y-1/2 w-5 h-5 text-slate-400" />
-                                  <input
-                                    type="email"
-                                    placeholder="seu@email.com"
-                                    value={loginForm.email}
-                                    onChange={(e) =>
-                                      setLoginForm({
-                                        ...loginForm,
-                                        email: e.target.value,
-                                      })
-                                    }
-                                    className="w-full bg-slate-800/50 border border-slate-700 rounded-xl pl-11 pr-4 py-3 text-white placeholder-slate-500 focus:outline-none focus:ring-2 focus:ring-blue-500/50 focus:border-blue-500/50 transition-all"
-                                    required
-                                    disabled={loading}
-                                  />
-                                </div>
+                                <input
+                                  type="email"
+                                  placeholder="your@email.com"
+                                  value={loginForm.email}
+                                  onChange={(e) =>
+                                    setLoginForm({
+                                      ...loginForm,
+                                      email: e.target.value,
+                                    })
+                                  }
+                                  className="w-full bg-gray-50 border border-gray-200 rounded-lg px-4 py-3 text-gray-900 focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-transparent"
+                                  required
+                                  disabled={loading}
+                                />
                               </div>
 
                               <div>
-                                <label className="block text-sm font-medium text-slate-300 mb-2">
-                                  Senha
+                                <label className="block text-sm font-medium text-gray-700 mb-2">
+                                  Password
                                 </label>
-                                <div className="relative">
-                                  <Lock className="absolute left-3 top-1/2 -translate-y-1/2 w-5 h-5 text-slate-400" />
-                                  <input
-                                    type="password"
-                                    placeholder="••••••••"
-                                    value={loginForm.password}
-                                    onChange={(e) =>
-                                      setLoginForm({
-                                        ...loginForm,
-                                        password: e.target.value,
-                                      })
-                                    }
-                                    className="w-full bg-slate-800/50 border border-slate-700 rounded-xl pl-11 pr-4 py-3 text-white placeholder-slate-500 focus:outline-none focus:ring-2 focus:ring-blue-500/50 focus:border-blue-500/50 transition-all"
-                                    required
-                                    disabled={loading}
-                                  />
-                                </div>
+                                <input
+                                  type="password"
+                                  placeholder="••••••••"
+                                  value={loginForm.password}
+                                  onChange={(e) =>
+                                    setLoginForm({
+                                      ...loginForm,
+                                      password: e.target.value,
+                                    })
+                                  }
+                                  className="w-full bg-gray-50 border border-gray-200 rounded-lg px-4 py-3 text-gray-900 focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-transparent"
+                                  required
+                                  disabled={loading}
+                                />
                               </div>
 
                               <button
                                 type="submit"
                                 disabled={loading}
-                                className="w-full bg-gradient-to-r from-blue-500 to-cyan-500 hover:from-blue-600 hover:to-cyan-600 text-white font-semibold py-3 rounded-xl transition-all disabled:opacity-50 disabled:cursor-not-allowed shadow-lg shadow-blue-500/25"
+                                className="w-full bg-blue-600 hover:bg-blue-700 text-white font-semibold py-3 rounded-lg transition-all disabled:opacity-50"
                               >
-                                {loading ? "Entrando..." : "Entrar"}
+                                {loading ? "Signing in..." : "Sign In"}
                               </button>
 
                               <div className="text-center">
@@ -418,115 +445,81 @@ export default function EventsApp() {
                                     setAuthMode("signup");
                                     setError("");
                                   }}
-                                  className="text-sm text-slate-400 hover:text-blue-400 transition-colors"
+                                  className="text-sm text-gray-600 hover:text-blue-600 transition-colors"
                                 >
-                                  Não tem uma conta?{" "}
-                                  <span className="font-semibold">
-                                    Cadastre-se
-                                  </span>
+                                  Don't have an account?{" "}
+                                  <span className="font-semibold">Sign up</span>
                                 </button>
                               </div>
                             </form>
                           ) : (
                             <form onSubmit={handleSignup} className="space-y-4">
                               <div>
-                                <label className="block text-sm font-medium text-slate-300 mb-2">
-                                  Nome completo
+                                <label className="block text-sm font-medium text-gray-700 mb-2">
+                                  Full name
                                 </label>
-                                <div className="relative">
-                                  <UserPlus className="absolute left-3 top-1/2 -translate-y-1/2 w-5 h-5 text-slate-400" />
-                                  <input
-                                    type="text"
-                                    placeholder="Seu nome"
-                                    value={signupForm.name}
-                                    onChange={(e) =>
-                                      setSignupForm({
-                                        ...signupForm,
-                                        name: e.target.value,
-                                      })
-                                    }
-                                    className="w-full bg-slate-800/50 border border-slate-700 rounded-xl pl-11 pr-4 py-3 text-white placeholder-slate-500 focus:outline-none focus:ring-2 focus:ring-blue-500/50 focus:border-blue-500/50 transition-all"
-                                    required
-                                    disabled={loading}
-                                  />
-                                </div>
+                                <input
+                                  type="text"
+                                  placeholder="Your name"
+                                  value={signupForm.name}
+                                  onChange={(e) =>
+                                    setSignupForm({
+                                      ...signupForm,
+                                      name: e.target.value,
+                                    })
+                                  }
+                                  className="w-full bg-gray-50 border border-gray-200 rounded-lg px-4 py-3 text-gray-900 focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-transparent"
+                                  required
+                                  disabled={loading}
+                                />
                               </div>
 
                               <div>
-                                <label className="block text-sm font-medium text-slate-300 mb-2">
+                                <label className="block text-sm font-medium text-gray-700 mb-2">
                                   Email
                                 </label>
-                                <div className="relative">
-                                  <Mail className="absolute left-3 top-1/2 -translate-y-1/2 w-5 h-5 text-slate-400" />
-                                  <input
-                                    type="email"
-                                    placeholder="seu@email.com"
-                                    value={signupForm.email}
-                                    onChange={(e) =>
-                                      setSignupForm({
-                                        ...signupForm,
-                                        email: e.target.value,
-                                      })
-                                    }
-                                    className="w-full bg-slate-800/50 border border-slate-700 rounded-xl pl-11 pr-4 py-3 text-white placeholder-slate-500 focus:outline-none focus:ring-2 focus:ring-blue-500/50 focus:border-blue-500/50 transition-all"
-                                    required
-                                    disabled={loading}
-                                  />
-                                </div>
+                                <input
+                                  type="email"
+                                  placeholder="your@email.com"
+                                  value={signupForm.email}
+                                  onChange={(e) =>
+                                    setSignupForm({
+                                      ...signupForm,
+                                      email: e.target.value,
+                                    })
+                                  }
+                                  className="w-full bg-gray-50 border border-gray-200 rounded-lg px-4 py-3 text-gray-900 focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-transparent"
+                                  required
+                                  disabled={loading}
+                                />
                               </div>
 
                               <div>
-                                <label className="block text-sm font-medium text-slate-300 mb-2">
-                                  Senha
+                                <label className="block text-sm font-medium text-gray-700 mb-2">
+                                  Password
                                 </label>
-                                <div className="relative">
-                                  <Lock className="absolute left-3 top-1/2 -translate-y-1/2 w-5 h-5 text-slate-400" />
-                                  <input
-                                    type="password"
-                                    placeholder="••••••••"
-                                    value={signupForm.password}
-                                    onChange={(e) =>
-                                      setSignupForm({
-                                        ...signupForm,
-                                        password: e.target.value,
-                                      })
-                                    }
-                                    className="w-full bg-slate-800/50 border border-slate-700 rounded-xl pl-11 pr-4 py-3 text-white placeholder-slate-500 focus:outline-none focus:ring-2 focus:ring-blue-500/50 focus:border-blue-500/50 transition-all"
-                                    required
-                                    disabled={loading}
-                                  />
-                                </div>
-                              </div>
-
-                              <div>
-                                <label className="block text-sm font-medium text-slate-300 mb-2">
-                                  Confirmar senha
-                                </label>
-                                <div className="relative">
-                                  <Lock className="absolute left-3 top-1/2 -translate-y-1/2 w-5 h-5 text-slate-400" />
-                                  <input
-                                    type="password"
-                                    placeholder="••••••••"
-                                    value={signupForm.confirmPassword}
-                                    onChange={(e) =>
-                                      setSignupForm({
-                                        ...signupForm,
-                                        confirmPassword: e.target.value,
-                                      })
-                                    }
-                                    className="w-full bg-slate-800/50 border border-slate-700 rounded-xl pl-11 pr-4 py-3 text-white placeholder-slate-500 focus:outline-none focus:ring-2 focus:ring-blue-500/50 focus:border-blue-500/50 transition-all"
-                                    required
-                                    disabled={loading}
-                                  />
-                                </div>
+                                <input
+                                  type="password"
+                                  placeholder="••••••••"
+                                  value={signupForm.password}
+                                  onChange={(e) =>
+                                    setSignupForm({
+                                      ...signupForm,
+                                      password: e.target.value,
+                                    })
+                                  }
+                                  className="w-full bg-gray-50 border border-gray-200 rounded-lg px-4 py-3 text-gray-900 focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-transparent"
+                                  required
+                                  disabled={loading}
+                                />
                               </div>
 
                               <button
                                 type="submit"
                                 disabled={loading}
-                                className="w-full bg-gradient-to-r from-blue-500 to-cyan-500 hover:from-blue-600 hover:to-cyan-600 text-white font-semibold py-3 rounded-xl transition-all disabled:opacity-50 disabled:cursor-not-allowed shadow-lg shadow-blue-500/25"
+                                className="w-full bg-blue-600 hover:bg-blue-700 text-white font-semibold py-3 rounded-lg transition-all disabled:opacity-50"
                               >
-                                {loading ? "Criando conta..." : "Criar conta"}
+                                {loading ? "Creating..." : "Create Account"}
                               </button>
 
                               <div className="text-center">
@@ -536,10 +529,10 @@ export default function EventsApp() {
                                     setAuthMode("login");
                                     setError("");
                                   }}
-                                  className="text-sm text-slate-400 hover:text-blue-400 transition-colors"
+                                  className="text-sm text-gray-600 hover:text-blue-600 transition-colors"
                                 >
-                                  Já tem uma conta?{" "}
-                                  <span className="font-semibold">Entrar</span>
+                                  Already have an account?{" "}
+                                  <span className="font-semibold">Sign in</span>
                                 </button>
                               </div>
                             </form>
@@ -555,42 +548,252 @@ export default function EventsApp() {
         </div>
       </nav>
 
+      {/* Hero Section */}
+      <section className="relative py-20 px-4 bg-gradient-to-br from-blue-50 via-blue-100/30 to-transparent">
+        <div className="max-w-4xl mx-auto text-center">
+          <div className="inline-flex items-center gap-2 px-4 py-2 bg-blue-100 text-blue-700 rounded-full mb-6">
+            <Sparkles className="w-4 h-4" />
+            <span className="text-sm font-medium">
+              Discover meaningful connections
+            </span>
+          </div>
+
+          <h1 className="text-5xl md:text-6xl font-bold text-gray-900 mb-4">
+            Find Your Next
+            <br />
+            <span className="text-blue-600">Adventure Together</span>
+          </h1>
+
+          <p className="text-lg text-gray-600 mb-8 max-w-2xl mx-auto">
+            Connect with like-minded people through events that matter. From
+            yoga sessions to tech meetups, find experiences that bring people
+            together.
+          </p>
+
+          <div className="flex gap-3 max-w-3xl mx-auto">
+            <div className="flex-1 relative">
+              <Search className="absolute left-4 top-1/2 -translate-y-1/2 w-5 h-5 text-gray-400" />
+              <input
+                type="text"
+                placeholder="Search events, categories, or locations..."
+                value={searchQuery}
+                onChange={(e) => setSearchQuery(e.target.value)}
+                className="w-full bg-white border border-gray-200 rounded-xl pl-12 pr-4 py-4 text-gray-900 placeholder-gray-400 focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-transparent shadow-sm"
+              />
+            </div>
+            <button
+              onClick={handleCreateEventClick}
+              className="flex items-center gap-2 px-8 py-4 bg-blue-600 hover:bg-blue-700 text-white font-semibold rounded-xl transition-all shadow-sm"
+            >
+              <span>Create Event</span>
+              <ArrowRight className="w-5 h-5" />
+            </button>
+          </div>
+
+          <div className="flex flex-wrap justify-center gap-3 mt-8">
+            {["Yoga", "Tech", "Art", "Music", "Food"].map((cat) => (
+              <button
+                key={cat}
+                className="px-6 py-2 bg-white hover:bg-gray-50 text-gray-700 font-medium rounded-full border border-gray-200 transition-all"
+              >
+                {cat}
+              </button>
+            ))}
+          </div>
+        </div>
+      </section>
+
+      {/* Events Section */}
+      <section className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-16">
+        <div className="mb-8">
+          <h2 className="text-3xl font-bold text-gray-900 mb-2">
+            Upcoming Events
+          </h2>
+          <p className="text-gray-600">Discover experiences waiting for you</p>
+        </div>
+
+        {/* Category Filter */}
+        <div className="flex gap-3 mb-8 overflow-x-auto pb-2">
+          {categories.map((cat) => (
+            <button
+              key={cat.id}
+              onClick={() => setSelectedCategory(cat.id)}
+              className={`px-6 py-2 font-medium rounded-full whitespace-nowrap transition-all ${
+                selectedCategory === cat.id
+                  ? "bg-blue-600 text-white"
+                  : "bg-white text-gray-700 hover:bg-gray-50 border border-gray-200"
+              }`}
+            >
+              {cat.name}
+            </button>
+          ))}
+        </div>
+
+        {/* Events Grid */}
+        {events.length === 0 ? (
+          <div className="text-center py-20">
+            <Calendar className="w-24 h-24 text-gray-300 mx-auto mb-6" />
+            <h3 className="text-2xl font-bold text-gray-900 mb-2">
+              No events yet
+            </h3>
+            <p className="text-gray-600 mb-6">
+              Be the first to create an amazing event!
+            </p>
+            <button
+              onClick={handleCreateEventClick}
+              className="inline-flex items-center gap-2 px-6 py-3 bg-blue-600 hover:bg-blue-700 text-white font-semibold rounded-lg transition-all"
+            >
+              <Plus className="w-5 h-5" />
+              <span>Create First Event</span>
+            </button>
+          </div>
+        ) : (
+          <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
+            {events.map((event) => (
+              <div
+                key={event.id}
+                className="bg-white rounded-2xl overflow-hidden border border-gray-200 hover:shadow-xl transition-all group"
+              >
+                {event.image && (
+                  <div className="relative h-56 overflow-hidden">
+                    <img
+                      src={event.image}
+                      alt={event.title}
+                      className="w-full h-full object-cover group-hover:scale-105 transition-transform duration-300"
+                    />
+                    {event.category && (
+                      <div className="absolute top-4 left-4 px-4 py-1.5 bg-white text-gray-900 text-sm font-medium rounded-full shadow-sm">
+                        {event.category}
+                      </div>
+                    )}
+                    {event.host && (
+                      <div className="absolute bottom-4 left-4 flex items-center gap-2">
+                        <div className="w-10 h-10 rounded-full bg-white border-2 border-white flex items-center justify-center">
+                          {event.host.avatar ? (
+                            <img
+                              src={event.host.avatar}
+                              alt={event.host.name}
+                              className="w-full h-full rounded-full object-cover"
+                            />
+                          ) : (
+                            <User className="w-5 h-5 text-gray-600" />
+                          )}
+                        </div>
+                        <div className="text-white text-sm">
+                          <div className="font-semibold drop-shadow">
+                            {event.host.name}
+                          </div>
+                          <div className="text-xs opacity-90 drop-shadow">
+                            Host
+                          </div>
+                        </div>
+                      </div>
+                    )}
+                  </div>
+                )}
+
+                <div className="p-6">
+                  <h3 className="text-xl font-bold text-gray-900 mb-2 group-hover:text-blue-600 transition-colors">
+                    {event.title}
+                  </h3>
+                  {event.description && (
+                    <p className="text-gray-600 text-sm mb-4 line-clamp-2">
+                      {event.description}
+                    </p>
+                  )}
+
+                  <div className="space-y-2 mb-4">
+                    {event.date && (
+                      <div className="flex items-center text-gray-600 text-sm">
+                        <Calendar className="w-4 h-4 mr-2 text-blue-600" />
+                        {new Date(event.date).toLocaleDateString("en-US", {
+                          weekday: "short",
+                          month: "short",
+                          day: "numeric",
+                        })}
+                        {event.time && (
+                          <>
+                            <Clock className="w-4 h-4 ml-4 mr-2 text-blue-600" />
+                            {event.time}
+                          </>
+                        )}
+                      </div>
+                    )}
+                    {event.location && (
+                      <div className="flex items-center text-gray-600 text-sm">
+                        <MapPin className="w-4 h-4 mr-2 text-blue-600" />
+                        {event.location}
+                      </div>
+                    )}
+                  </div>
+
+                  <div className="flex items-center justify-between pt-4 border-t border-gray-100">
+                    <div className="flex items-center gap-2">
+                      <Users className="w-4 h-4 text-gray-400" />
+                      <span className="text-sm text-gray-600">
+                        {event.attendees || 0}/{event.capacity || "∞"}
+                      </span>
+                      {event.capacity && event.attendees && (
+                        <div className="w-16 h-1.5 bg-gray-200 rounded-full overflow-hidden">
+                          <div
+                            className="h-full bg-blue-600 rounded-full"
+                            style={{
+                              width: `${Math.min(
+                                (event.attendees / event.capacity) * 100,
+                                100,
+                              )}%`,
+                            }}
+                          />
+                        </div>
+                      )}
+                    </div>
+                    <button className="px-6 py-2 bg-blue-600 hover:bg-blue-700 text-white font-semibold rounded-lg transition-all">
+                      Join
+                    </button>
+                  </div>
+                </div>
+              </div>
+            ))}
+          </div>
+        )}
+      </section>
+
       {/* Create Event Modal */}
       {showCreateModal && (
         <>
           <div
-            className="fixed inset-0 bg-black/60 backdrop-blur-sm z-50"
+            className="fixed inset-0 bg-black/50 backdrop-blur-sm z-50"
             onClick={() => setShowCreateModal(false)}
           />
 
           <div className="fixed inset-0 z-50 flex items-center justify-center p-4">
-            <div className="bg-slate-900/95 backdrop-blur-xl rounded-2xl shadow-2xl border border-blue-500/20 w-full max-w-2xl max-h-[90vh] overflow-y-auto animate-in zoom-in-95 duration-200">
-              <div className="p-6 border-b border-slate-800 flex items-center justify-between sticky top-0 bg-slate-900/95 backdrop-blur-xl">
-                <h2 className="text-2xl font-bold text-white">
-                  Criar Novo Evento
+            <div className="bg-white rounded-2xl shadow-2xl w-full max-w-2xl max-h-[90vh] overflow-y-auto">
+              <div className="p-6 border-b border-gray-100 flex items-center justify-between sticky top-0 bg-white">
+                <h2 className="text-2xl font-bold text-gray-900">
+                  Create New Event
                 </h2>
                 <button
                   onClick={() => setShowCreateModal(false)}
-                  className="p-2 hover:bg-slate-800 rounded-lg transition-colors"
+                  className="p-2 hover:bg-gray-100 rounded-lg transition-colors"
                 >
-                  <X className="w-6 h-6 text-slate-400" />
+                  <X className="w-6 h-6 text-gray-600" />
                 </button>
               </div>
 
               <form onSubmit={handleCreateEvent} className="p-6 space-y-5">
                 {error && (
-                  <div className="bg-red-500/10 border border-red-500/30 rounded-xl px-4 py-3 text-red-400 text-sm">
+                  <div className="bg-red-50 border border-red-200 rounded-lg px-4 py-3 text-red-600 text-sm">
                     {error}
                   </div>
                 )}
 
                 <div>
-                  <label className="block text-sm font-medium text-slate-300 mb-2">
-                    Título do Evento *
+                  <label className="block text-sm font-medium text-gray-700 mb-2">
+                    Event Title *
                   </label>
                   <input
                     type="text"
-                    placeholder="Ex: Conferência Tech 2026"
+                    placeholder="e.g., Tech Conference 2026"
                     value={createEventForm.title}
                     onChange={(e) =>
                       setCreateEventForm({
@@ -598,18 +801,18 @@ export default function EventsApp() {
                         title: e.target.value,
                       })
                     }
-                    className="w-full bg-slate-800/50 border border-slate-700 rounded-xl px-4 py-3 text-white placeholder-slate-500 focus:outline-none focus:ring-2 focus:ring-blue-500/50 focus:border-blue-500/50 transition-all"
+                    className="w-full bg-gray-50 border border-gray-200 rounded-lg px-4 py-3 text-gray-900 focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-transparent"
                     required
                     disabled={loading}
                   />
                 </div>
 
                 <div>
-                  <label className="block text-sm font-medium text-slate-300 mb-2">
-                    Descrição *
+                  <label className="block text-sm font-medium text-gray-700 mb-2">
+                    Description *
                   </label>
                   <textarea
-                    placeholder="Descreva o evento..."
+                    placeholder="Describe your event..."
                     value={createEventForm.description}
                     onChange={(e) =>
                       setCreateEventForm({
@@ -618,7 +821,7 @@ export default function EventsApp() {
                       })
                     }
                     rows={4}
-                    className="w-full bg-slate-800/50 border border-slate-700 rounded-xl px-4 py-3 text-white placeholder-slate-500 focus:outline-none focus:ring-2 focus:ring-blue-500/50 focus:border-blue-500/50 transition-all resize-none"
+                    className="w-full bg-gray-50 border border-gray-200 rounded-lg px-4 py-3 text-gray-900 focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-transparent resize-none"
                     required
                     disabled={loading}
                   />
@@ -626,67 +829,38 @@ export default function EventsApp() {
 
                 <div className="grid grid-cols-2 gap-4">
                   <div>
-                    <label className="block text-sm font-medium text-slate-300 mb-2">
-                      Data *
+                    <label className="block text-sm font-medium text-gray-700 mb-2">
+                      Date *
                     </label>
-                    <div className="relative">
-                      <Calendar className="absolute left-3 top-1/2 -translate-y-1/2 w-5 h-5 text-slate-400" />
-                      <input
-                        type="date"
-                        value={createEventForm.date}
-                        onChange={(e) =>
-                          setCreateEventForm({
-                            ...createEventForm,
-                            date: e.target.value,
-                          })
-                        }
-                        className="w-full bg-slate-800/50 border border-slate-700 rounded-xl pl-11 pr-4 py-3 text-white focus:outline-none focus:ring-2 focus:ring-blue-500/50 focus:border-blue-500/50 transition-all"
-                        required
-                        disabled={loading}
-                      />
-                    </div>
-                  </div>
-
-                  <div>
-                    <label className="block text-sm font-medium text-slate-300 mb-2">
-                      Horário *
-                    </label>
-                    <div className="relative">
-                      <Clock className="absolute left-3 top-1/2 -translate-y-1/2 w-5 h-5 text-slate-400" />
-                      <input
-                        type="time"
-                        value={createEventForm.time}
-                        onChange={(e) =>
-                          setCreateEventForm({
-                            ...createEventForm,
-                            time: e.target.value,
-                          })
-                        }
-                        className="w-full bg-slate-800/50 border border-slate-700 rounded-xl pl-11 pr-4 py-3 text-white focus:outline-none focus:ring-2 focus:ring-blue-500/50 focus:border-blue-500/50 transition-all"
-                        required
-                        disabled={loading}
-                      />
-                    </div>
-                  </div>
-                </div>
-
-                <div>
-                  <label className="block text-sm font-medium text-slate-300 mb-2">
-                    Local *
-                  </label>
-                  <div className="relative">
-                    <MapPin className="absolute left-3 top-1/2 -translate-y-1/2 w-5 h-5 text-slate-400" />
                     <input
-                      type="text"
-                      placeholder="Ex: Centro de Convenções, São Paulo"
-                      value={createEventForm.location}
+                      type="date"
+                      value={createEventForm.date}
                       onChange={(e) =>
                         setCreateEventForm({
                           ...createEventForm,
-                          location: e.target.value,
+                          date: e.target.value,
                         })
                       }
-                      className="w-full bg-slate-800/50 border border-slate-700 rounded-xl pl-11 pr-4 py-3 text-white placeholder-slate-500 focus:outline-none focus:ring-2 focus:ring-blue-500/50 focus:border-blue-500/50 transition-all"
+                      className="w-full bg-gray-50 border border-gray-200 rounded-lg px-4 py-3 text-gray-900 focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-transparent"
+                      required
+                      disabled={loading}
+                    />
+                  </div>
+
+                  <div>
+                    <label className="block text-sm font-medium text-gray-700 mb-2">
+                      Time *
+                    </label>
+                    <input
+                      type="time"
+                      value={createEventForm.time}
+                      onChange={(e) =>
+                        setCreateEventForm({
+                          ...createEventForm,
+                          time: e.target.value,
+                        })
+                      }
+                      className="w-full bg-gray-50 border border-gray-200 rounded-lg px-4 py-3 text-gray-900 focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-transparent"
                       required
                       disabled={loading}
                     />
@@ -694,68 +868,107 @@ export default function EventsApp() {
                 </div>
 
                 <div>
-                  <label className="block text-sm font-medium text-slate-300 mb-2">
-                    Categoria
+                  <label className="block text-sm font-medium text-gray-700 mb-2">
+                    Location *
                   </label>
-                  <select
-                    value={createEventForm.category}
+                  <input
+                    type="text"
+                    placeholder="e.g., Central Park, NYC"
+                    value={createEventForm.location}
                     onChange={(e) =>
                       setCreateEventForm({
                         ...createEventForm,
-                        category: e.target.value,
+                        location: e.target.value,
                       })
                     }
-                    className="w-full bg-slate-800/50 border border-slate-700 rounded-xl px-4 py-3 text-white focus:outline-none focus:ring-2 focus:ring-blue-500/50 focus:border-blue-500/50 transition-all"
+                    className="w-full bg-gray-50 border border-gray-200 rounded-lg px-4 py-3 text-gray-900 focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-transparent"
+                    required
                     disabled={loading}
-                  >
-                    <option value="">Selecione uma categoria</option>
-                    <option value="Tecnologia">Tecnologia</option>
-                    <option value="Música">Música</option>
-                    <option value="Arte">Arte</option>
-                    <option value="Esportes">Esportes</option>
-                    <option value="Negócios">Negócios</option>
-                    <option value="Educação">Educação</option>
-                    <option value="Entretenimento">Entretenimento</option>
-                  </select>
+                  />
                 </div>
 
-                <div>
-                  <label className="block text-sm font-medium text-slate-300 mb-2">
-                    URL da Imagem
-                  </label>
-                  <div className="relative">
-                    <ImageIcon className="absolute left-3 top-1/2 -translate-y-1/2 w-5 h-5 text-slate-400" />
-                    <input
-                      type="url"
-                      placeholder="https://exemplo.com/imagem.jpg"
-                      value={createEventForm.image}
+                <div className="grid grid-cols-2 gap-4">
+                  <div>
+                    <label className="block text-sm font-medium text-gray-700 mb-2">
+                      Category
+                    </label>
+                    <select
+                      value={createEventForm.category}
                       onChange={(e) =>
                         setCreateEventForm({
                           ...createEventForm,
-                          image: e.target.value,
+                          category: e.target.value,
                         })
                       }
-                      className="w-full bg-slate-800/50 border border-slate-700 rounded-xl pl-11 pr-4 py-3 text-white placeholder-slate-500 focus:outline-none focus:ring-2 focus:ring-blue-500/50 focus:border-blue-500/50 transition-all"
+                      className="w-full bg-gray-50 border border-gray-200 rounded-lg px-4 py-3 text-gray-900 focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-transparent"
+                      disabled={loading}
+                    >
+                      <option value="">Select category</option>
+                      <option value="Wellness">Wellness</option>
+                      <option value="Technology">Technology</option>
+                      <option value="Art & Culture">Art & Culture</option>
+                      <option value="Social">Social</option>
+                      <option value="Outdoor">Outdoor</option>
+                      <option value="Food & Drink">Food & Drink</option>
+                      <option value="Music">Music</option>
+                      <option value="Sports">Sports</option>
+                    </select>
+                  </div>
+
+                  <div>
+                    <label className="block text-sm font-medium text-gray-700 mb-2">
+                      Capacity
+                    </label>
+                    <input
+                      type="number"
+                      placeholder="Max attendees"
+                      value={createEventForm.capacity}
+                      onChange={(e) =>
+                        setCreateEventForm({
+                          ...createEventForm,
+                          capacity: e.target.value,
+                        })
+                      }
+                      className="w-full bg-gray-50 border border-gray-200 rounded-lg px-4 py-3 text-gray-900 focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-transparent"
                       disabled={loading}
                     />
                   </div>
+                </div>
+
+                <div>
+                  <label className="block text-sm font-medium text-gray-700 mb-2">
+                    Image URL
+                  </label>
+                  <input
+                    type="url"
+                    placeholder="https://example.com/image.jpg"
+                    value={createEventForm.image}
+                    onChange={(e) =>
+                      setCreateEventForm({
+                        ...createEventForm,
+                        image: e.target.value,
+                      })
+                    }
+                    className="w-full bg-gray-50 border border-gray-200 rounded-lg px-4 py-3 text-gray-900 focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-transparent"
+                    disabled={loading}
+                  />
                 </div>
 
                 <div className="flex gap-3 pt-4">
                   <button
                     type="button"
                     onClick={() => setShowCreateModal(false)}
-                    className="flex-1 bg-slate-800 hover:bg-slate-700 text-slate-300 font-semibold py-3 rounded-xl transition-all"
+                    className="flex-1 bg-gray-100 hover:bg-gray-200 text-gray-700 font-semibold py-3 rounded-lg transition-all"
                     disabled={loading}
                   >
-                    Cancelar
+                    Cancel
                   </button>
                   <button
                     type="submit"
                     disabled={loading}
-                    className="flex-1 bg-gradient-to-r from-blue-500 to-cyan-500 hover:from-blue-600 hover:to-cyan-600 text-white font-semibold py-3 rounded-xl transition-all disabled:opacity-50 disabled:cursor-not-allowed shadow-lg shadow-blue-500/25"
+                    className="flex-1 bg-blue-600 hover:bg-blue-700 text-white font-semibold py-3 rounded-lg transition-all disabled:opacity-50"
                   >
-                    {loading ? "Criando..." : "Criar Evento"}
+                    {loading ? "Creating..." : "Create Event"}
                   </button>
                 </div>
               </form>
@@ -763,112 +976,6 @@ export default function EventsApp() {
           </div>
         </>
       )}
-
-      {/* Main Content */}
-      <main className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-12">
-        {!isAuthenticated ? (
-          <div className="text-center py-20">
-            <div className="inline-block bg-gradient-to-br from-blue-500 to-cyan-500 p-6 rounded-3xl mb-6">
-              <Calendar className="w-20 h-20 text-white" />
-            </div>
-            <h1 className="text-5xl font-bold text-white mb-4">
-              Bem-vindo ao Events Hub
-            </h1>
-            <p className="text-slate-400 text-xl mb-8">
-              Entre para descobrir eventos incríveis
-            </p>
-            <div className="inline-block bg-blue-500/10 border border-blue-500/30 rounded-2xl px-8 py-4">
-              <p className="text-blue-300 font-medium">
-                Clique em "Conta" no canto superior direito para fazer login
-              </p>
-            </div>
-          </div>
-        ) : events.length === 0 ? (
-          <div className="text-center py-20">
-            <Calendar className="w-24 h-24 text-slate-700 mx-auto mb-6" />
-            <h2 className="text-3xl font-bold text-white mb-4">
-              Nenhum evento disponível
-            </h2>
-            <p className="text-slate-400 text-lg mb-8">
-              Seja o primeiro a criar um evento!
-            </p>
-            <button
-              onClick={() => setShowCreateModal(true)}
-              className="inline-flex items-center gap-2 px-8 py-3 bg-gradient-to-r from-blue-500 to-cyan-500 hover:from-blue-600 hover:to-cyan-600 text-white font-semibold rounded-xl transition-all shadow-lg shadow-blue-500/25 hover:shadow-blue-500/40"
-            >
-              <Plus className="w-5 h-5" />
-              <span>Criar Primeiro Evento</span>
-            </button>
-          </div>
-        ) : (
-          <div>
-            <div className="flex items-center justify-between mb-8">
-              <h2 className="text-3xl font-bold text-white">
-                Próximos Eventos
-              </h2>
-              <p className="text-slate-400">
-                {events.length} {events.length === 1 ? "evento" : "eventos"}
-              </p>
-            </div>
-            <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
-              {events.map((event) => (
-                <div
-                  key={event.id}
-                  className="bg-slate-900/50 backdrop-blur-sm rounded-2xl overflow-hidden border border-blue-500/20 hover:border-blue-500/40 transition-all group hover:transform hover:scale-105 duration-300"
-                >
-                  {event.image && (
-                    <div className="relative h-48 overflow-hidden">
-                      <img
-                        src={event.image}
-                        alt={event.title}
-                        className="w-full h-full object-cover group-hover:scale-110 transition-transform duration-500"
-                      />
-                      {event.category && (
-                        <div className="absolute top-3 right-3 bg-gradient-to-r from-blue-500 to-cyan-500 text-white px-4 py-1.5 rounded-full text-sm font-semibold shadow-lg">
-                          {event.category}
-                        </div>
-                      )}
-                    </div>
-                  )}
-                  <div className="p-6">
-                    <h3 className="text-xl font-bold text-white mb-3 group-hover:text-blue-400 transition-colors">
-                      {event.title}
-                    </h3>
-                    {event.description && (
-                      <p className="text-slate-400 text-sm mb-4 line-clamp-2">
-                        {event.description}
-                      </p>
-                    )}
-                    <div className="space-y-2 mb-4">
-                      {event.date && (
-                        <div className="flex items-center text-slate-400 text-sm">
-                          <Calendar className="w-4 h-4 mr-2 text-blue-400" />
-                          {new Date(event.date).toLocaleDateString("pt-BR")}
-                        </div>
-                      )}
-                      {event.time && (
-                        <div className="flex items-center text-slate-400 text-sm">
-                          <Clock className="w-4 h-4 mr-2 text-blue-400" />
-                          {event.time}
-                        </div>
-                      )}
-                      {event.location && (
-                        <div className="flex items-center text-slate-400 text-sm">
-                          <MapPin className="w-4 h-4 mr-2 text-blue-400" />
-                          {event.location}
-                        </div>
-                      )}
-                    </div>
-                    <button className="w-full bg-gradient-to-r from-blue-500 to-cyan-500 hover:from-blue-600 hover:to-cyan-600 text-white font-semibold py-2.5 rounded-xl transition-all shadow-lg shadow-blue-500/25 hover:shadow-blue-500/40">
-                      Ver Detalhes
-                    </button>
-                  </div>
-                </div>
-              ))}
-            </div>
-          </div>
-        )}
-      </main>
     </div>
   );
 }
