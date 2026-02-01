@@ -3,7 +3,10 @@ class UsersController < ApplicationController
     user = User.new(user_params)
 
     if user.save
+      token = JwtService.encode(user_id: user.id)
+
       render json: {
+        token: token,
         message: "User created successfully",
         user: {
           name: user.name,
@@ -22,11 +25,13 @@ class UsersController < ApplicationController
    def login
     user = User.find_by(email: params[:email])
 
+    token = JwtService.encode(user_id: user.id)
+
     if user&.authenticate(params[:password])
       render json: {
         message: "Login successful",
         user: {
-          id: user.id,
+          token: token,
           name: user.name,
           email: user.email
         }
@@ -36,6 +41,11 @@ class UsersController < ApplicationController
         message: "Invalid email or password"
       }, status: :unauthorized
     end
+  end
+
+
+  def logout
+    render json: {message: "Logegd out"}
   end
 
   private
